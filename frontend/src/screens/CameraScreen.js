@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   StyleSheet,
@@ -26,6 +26,12 @@ export const CameraScreen = ({ navigation, onImageCaptured }) => {
   const [capturing, setCapturing] = useState(false);
   const cameraRef = useRef(null);
 
+  useEffect(() => {
+    if (!hasPermission) {
+      requestPermission();
+    }
+  }, [hasPermission, requestPermission]);
+
   const handleClose = () => {
     navigation.goBack();
   };
@@ -50,6 +56,20 @@ export const CameraScreen = ({ navigation, onImageCaptured }) => {
       setCapturing(false);
     }
   };
+
+  if (!hasPermission) {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: '#000' }]}>
+        <StatusBar barStyle="light-content" backgroundColor="#000" />
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>Camera permission is required.</Text>
+          <TouchableOpacity onPress={requestPermission} style={{ marginTop: 16, backgroundColor: YELLOW, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20 }}>
+            <Text style={{ color: '#000', fontWeight: '700' }}>Grant Permission</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   if (!device) {
     return (

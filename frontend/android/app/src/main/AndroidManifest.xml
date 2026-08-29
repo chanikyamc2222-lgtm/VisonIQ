@@ -5,6 +5,14 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Storage: READ_EXTERNAL_STORAGE for Android ≤ 12, ignored on 13+ -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <!-- Android 13+ image/video access -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <!-- Required to read .litertlm model file from Downloads on Android 13+ -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+
 
     <application
       android:name=".MainApplication"

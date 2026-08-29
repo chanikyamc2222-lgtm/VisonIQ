@@ -1,17 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  Alert,
-  NativeModules,
+  PermissionsAndroid,
+  Platform,
 } from 'react-native';
-import Voice from '@react-native-voice/voice';
-
-const hasNativeVoice = !!NativeModules.Voice && typeof NativeModules.Voice.startSpeech === 'function';
 import { useTheme } from '../theme/theme';
+import { startNativeVoiceRecognition, stopNativeVoiceRecognition } from '../services/api/localLLMService';
 
 /**
  * VoiceDebugger Component

@@ -6,24 +6,44 @@ import {
   Pressable,
   TextInput,
   TouchableOpacity,
-  KeyboardAvoidingView,
+  Keyboard,
   Platform,
   Dimensions,
   Image,
   Text,
   Alert,
-  NativeModules,
+  PermissionsAndroid,
+  ActivityIndicator,
+  ScrollView,
 } from 'react-native';
-import Voice from '@react-native-voice/voice';
 import Tts from 'react-native-tts';
-import { Mic, Send, X, Volume2 } from 'lucide-react-native';
+import { Mic, Send, X } from 'lucide-react-native';
 import { useTheme } from '../theme/theme';
-
-const hasNativeVoice = !!NativeModules.Voice && typeof NativeModules.Voice.startSpeech === 'function';
+import { visionApi } from '../services/api/visionApi';
+import { startNativeVoiceRecognition, stopNativeVoiceRecognition } from '../services/api/localLLMService';
 
 const { height } = Dimensions.get('window');
-const MODAL_HEIGHT = height * 0.35;
 const YELLOW = '#FFC400';
+
+// ─── Mic permission helper ────────────────────────────────────────────────────
+const requestMicPermission = async () => {
+  if (Platform.OS !== 'android') return true;
+  try {
+    const granted = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+      {
+        title: 'Microphone Permission',
+        message: 'VisionIQ needs microphone access to understand your voice questions.',
+        buttonPositive: 'Allow',
+        buttonNegative: 'Deny',
+      }
+    );
+    return granted === PermissionsAndroid.RESULTS.GRANTED;
+  } catch (e) {
+    console.warn('[VoiceChatModal] Mic permission error:', e);
+    return false;
+  }
+};
 
 export const VoiceChatModal = ({
   visible,
@@ -33,12 +53,18 @@ export const VoiceChatModal = ({
 }) => {
   const theme = useTheme();
   const inputRef = useRef(null);
-  const voiceRef = useRef(null);
+  // Keep imageUri in a ref so handleSubmit always reads the latest value (no stale closure)
+  const imageUriRef = useRef(imageUri);
   const [question, setQuestion] = useState('');
   const [isListening, setIsListening] = useState(false);
   const [submitted, setSubmitted] = useState('');
   const [messages, setMessages] = useState([]);
-  const [voiceAvailable, setVoiceAvailable] = useState(true);
+  const [loading, setLoading] = useState(false);
+
+  // Keep ref in sync with prop
+  useEffect(() => {
+    imageUriRef.current = imageUri;
+  }, [imageUri]);
 
   useEffect(() => {
     if (visible) {
@@ -48,95 +74,62 @@ export const VoiceChatModal = ({
     }
   }, [visible]);
 
+  // When imageUri changes (new image selected), reset conversation and re-analyze
   useEffect(() => {
-    // Initialize Voice with proper error handling
-    const initializeVoice = () => {
-      try {
-        if (hasNativeVoice && Voice) {
-          voiceRef.current = Voice;
+    if (visible && imageUri) {
+      setMessages([]);
+      setSubmitted('');
 
-          Voice.onSpeechResults = (event) => {
-            const text = event.value?.[0]?.trim();
-            setIsListening(false);
-            if (text) {
-              setQuestion('');
-              setSubmitted(text);
-              handleSubmit(text);
-            }
-          };
-
-          Voice.onSpeechError = (event) => {
-            setIsListening(false);
-            console.error('Speech error:', event.error);
-            Alert.alert('Voice Error', event.error || 'Could not process speech. Please try again.');
-          };
-
-          Voice.onSpeechStart = () => {
-            console.log('Speech recording started');
-          };
-
-          Voice.onSpeechEnd = () => {
-            console.log('Speech recording ended');
-          };
-          setVoiceAvailable(true);
-          return;
-        }
-
-        setVoiceAvailable(false);
-        console.warn('Voice module not available');
-      } catch (error) {
-        console.error('Voice initialization error:', error);
-        setVoiceAvailable(false);
-      }
-    };
-
-    initializeVoice();
-
-    return () => {
-      if (voiceRef.current && hasNativeVoice) {
+      (async () => {
+        setLoading(true);
         try {
-          voiceRef.current.destroy?.().catch(() => {});
-        } catch (error) {
-          console.error('Voice cleanup error:', error);
+          console.log('[VoiceChatModal] Analyzing new image:', imageUri);
+          const res = await visionApi.analyzeImage({ imageUri });
+          const initialText = res.result?.summary || res.answer || 'Image analyzed successfully.';
+          setMessages([{ id: Date.now(), text: initialText, sender: 'ai' }]);
+        } catch (err) {
+          console.warn('[VoiceChatModal] Initial image analysis error:', err);
+          setMessages([{ id: Date.now(), text: `Could not analyze image: ${err.message}`, sender: 'ai' }]);
+        } finally {
+          setLoading(false);
         }
-      }
-    };
-  }, []);
+      })();
+    }
+  }, [visible, imageUri]);
 
   const startListening = async () => {
+    // Request mic permission first
+    const hasMicPermission = await requestMicPermission();
+    if (!hasMicPermission) {
+      Alert.alert(
+        'Microphone Permission Required',
+        'Please allow microphone access in Settings to use voice input.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
     try {
-      if (!hasNativeVoice || !Voice || !voiceRef.current) {
-        Alert.alert('Error', 'Voice recognition is not available on this device.');
-        setVoiceAvailable(false);
-        return;
-      }
-
       setIsListening(true);
-
-      try {
-        await Voice.stop?.();
-        await new Promise(resolve => setTimeout(resolve, 100));
-      } catch (e) {
-        console.warn('Error stopping previous voice:', e);
-      }
-
-      await Voice.start('en-US');
-    } catch (error) {
+      const spokenText = await startNativeVoiceRecognition();
       setIsListening(false);
-      console.error('Voice start error:', error);
-      Alert.alert('Error', `Could not start voice recognition: ${error.message || error}`);
+      if (spokenText?.trim()) {
+        handleSubmit(spokenText.trim());
+      }
+    } catch (err) {
+      setIsListening(false);
+      console.warn('[VoiceChatModal] Voice recognition error:', err);
+      Alert.alert('Voice Input', err.message || 'Could not recognize speech. Please type your question instead.');
     }
   };
 
   const stopListening = async () => {
     try {
-      if (voiceRef.current && hasNativeVoice) {
-        await voiceRef.current.stop?.();
-      }
+      await stopNativeVoiceRecognition();
+    } catch (e) {
+      console.warn('[VoiceChatModal] stopListening error:', e);
+    } finally {
       setIsListening(false);
-    } catch (error) {
-      setIsListening(false);
-      console.error('Voice stop error:', error);
     }
   };
 
@@ -146,10 +139,24 @@ export const VoiceChatModal = ({
       setQuestion('');
       setSubmitted(text);
 
-      setMessages([...messages, { id: Date.now(), text, sender: 'user' }]);
+      const userMsg = { id: Date.now(), text, sender: 'user' };
+      setMessages(prev => [...prev, userMsg]);
 
       if (onSubmit) {
         onSubmit(text);
+      }
+
+      setLoading(true);
+      try {
+        const res = await visionApi.askChat({ sessionId: `session_${Date.now()}`, message: text, imageUri: imageUriRef.current });
+        const aiText = res.answer || res.result?.summary || (typeof res === 'string' ? res : JSON.stringify(res));
+        const aiMsg = { id: Date.now() + 1, text: aiText, sender: 'ai' };
+        setMessages(prev => [...prev, aiMsg]);
+      } catch (err) {
+        const errMsg = { id: Date.now() + 1, text: `Analysis error: ${err.message || err}`, sender: 'ai' };
+        setMessages(prev => [...prev, errMsg]);
+      } finally {
+        setLoading(false);
       }
     }
   };
@@ -193,6 +200,25 @@ export const VoiceChatModal = ({
     onClose?.();
   };
 
+  const [keyboardPadding, setKeyboardPadding] = useState(0);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvent, (e) => {
+      setKeyboardPadding(e.endCoordinates.height);
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardPadding(0);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
   return (
     <Modal
       visible={visible}
@@ -200,16 +226,10 @@ export const VoiceChatModal = ({
       animationType="slide"
       onRequestClose={handleClose}
     >
-      <Pressable style={styles.backdrop} onPress={handleClose}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          keyboardVerticalOffset={Platform.OS === 'ios' ? 24 : 0}
-          style={styles.keyboardAvoid}
-        >
-          <Pressable
-            style={[styles.sheet, { backgroundColor: theme.colors.card }]}
-            onPress={() => {}}
-          >
+      <View style={styles.backdrop}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={handleClose} />
+        <View style={{ width: '100%', paddingBottom: keyboardPadding, justifyContent: 'flex-end' }}>
+          <View style={[styles.sheet, { backgroundColor: theme.colors.card }]}>
             {/* Handle bar */}
             <View style={[styles.handle, { backgroundColor: theme.colors.border }]} />
 
@@ -237,23 +257,33 @@ export const VoiceChatModal = ({
               </TouchableOpacity>
             </View>
 
-            {submitted && (
-              <View style={styles.messageContainer}>
-                <View style={styles.messageRow}>
-                  <View style={styles.messageTextWrap}>
-                    <Text style={[styles.messageLabel, { color: theme.colors.textSecondary }]}>
-                      Submitted
-                    </Text>
-                    <Text style={[styles.submittedText, { color: theme.colors.text }]}>
-                      "{submitted}"
-                    </Text>
-                  </View>
-                  <TouchableOpacity onPress={handleSpeakText} style={styles.playButton}>
-                    <Volume2 color={YELLOW} size={18} />
-                  </TouchableOpacity>
+            <ScrollView style={{ flex: 1, marginVertical: 8 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={true}>
+              {messages.map((msg, index) => (
+                <View
+                  key={msg.id || index}
+                  style={{
+                    marginVertical: 4,
+                    alignSelf: msg.sender === 'user' ? 'flex-end' : 'flex-start',
+                    backgroundColor: msg.sender === 'user' ? YELLOW + '20' : '#222',
+                    borderColor: msg.sender === 'user' ? YELLOW : '#444',
+                    borderWidth: 1,
+                    borderRadius: 12,
+                    padding: 10,
+                    maxWidth: '88%',
+                  }}
+                >
+                  <Text style={{ color: msg.sender === 'user' ? YELLOW : '#fff', fontSize: 13, lineHeight: 18 }}>
+                    {msg.text}
+                  </Text>
                 </View>
-              </View>
-            )}
+              ))}
+              {loading && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginVertical: 6 }}>
+                  <ActivityIndicator color={YELLOW} size="small" style={{ marginRight: 8 }} />
+                  <Text style={{ color: YELLOW, fontSize: 12, fontWeight: '600' }}>Analyzing image with Gemma AI...</Text>
+                </View>
+              )}
+            </ScrollView>
 
             <View
               style={[
@@ -281,25 +311,19 @@ export const VoiceChatModal = ({
               {/* Mic Button */}
               <TouchableOpacity
                 onPress={() => {
-                  if (!voiceAvailable) {
-                    Alert.alert('Voice Not Available', 'Voice recognition is not available on this device. Please use text input instead.');
-                    return;
-                  }
                   if (isListening) {
                     stopListening();
                   } else {
                     startListening();
                   }
                 }}
-                disabled={!voiceAvailable}
                 style={[
                   styles.micButton,
                   isListening && { backgroundColor: YELLOW + '30' },
-                  !voiceAvailable && { opacity: 0.5 },
                 ]}
               >
                 <Mic
-                  color={isListening ? YELLOW : (voiceAvailable ? theme.colors.textMuted : theme.colors.textMuted)}
+                  color={isListening ? YELLOW : YELLOW}
                   size={20}
                   strokeWidth={isListening ? 2.5 : 2}
                 />
@@ -316,9 +340,9 @@ export const VoiceChatModal = ({
                 <Send color="#000" size={18} strokeWidth={2.5} />
               </TouchableOpacity>
             </View>
-          </Pressable>
-        </KeyboardAvoidingView>
-      </Pressable>
+          </View>
+        </View>
+      </View>
     </Modal>
   );
 };
@@ -328,10 +352,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.4)',
     justifyContent: 'flex-end',
-  },
-  keyboardAvoid: {
-    flex: 0,
-    height: MODAL_HEIGHT,
   },
   sheet: {
     flex: 1,

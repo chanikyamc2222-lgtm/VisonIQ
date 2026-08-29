@@ -3,8 +3,9 @@ import {
   Alert,
   BackHandler,
   Image,
-  KeyboardAvoidingView,
+  Keyboard,
   Modal,
+  PermissionsAndroid,
   Platform,
   Pressable,
   SafeAreaView,
@@ -15,19 +16,18 @@ import {
   TextInput,
   TouchableOpacity,
   View,
-  NativeModules,
+  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDispatch, useSelector } from 'react-redux';
 import LottieView from 'lottie-react-native';
-import Voice from '@react-native-voice/voice';
 import { Camera as CameraIcon, Check, ChevronRight, FileImage, History, ImagePlus, Mic, Send, Sparkles, X } from 'lucide-react-native';
 import { Camera, useCameraDevice, useCameraPermission, usePhotoOutput } from 'react-native-vision-camera';
 import { launchImageLibrary } from 'react-native-image-picker';
 import { addHistoryItem } from '../store/slices/historySlice';
+import { visionApi } from '../services/api/visionApi';
+import { startNativeVoiceRecognition, stopNativeVoiceRecognition } from '../services/api/localLLMService';
 import scanLoader from '../assets/scan-loader.json';
-
-const hasNativeVoice = !!NativeModules.Voice && typeof NativeModules.Voice.startSpeech === 'function';
 
 const yellow = '#FFC400';
 
@@ -49,6 +49,8 @@ const HomeScreen = () => {
   const [submittedQuestion, setSubmittedQuestion] = useState('');
   const [listening, setListening] = useState(false);
   const [landing, setLanding] = useState(true);
+  const [aiResponse, setAiResponse] = useState('');
+  const [loadingAi, setLoadingAi] = useState(false);
   const input = useRef(null);
 
   const error = message => Alert.alert('Unable to continue', message);
@@ -61,21 +63,52 @@ const HomeScreen = () => {
       createdAt: Date.now(),
     }));
   };
-  const submit = value => { const text = (value ?? question).trim(); if (text) { setQuestion(''); setSubmittedQuestion(text); } };
 
-  useEffect(() => { const timer = setTimeout(() => setLanding(false), 900); return () => clearTimeout(timer); }, []);
+  const submit = async value => {
+    const text = (value ?? question).trim();
+    if (!text) return;
+    setQuestion('');
+    setSubmittedQuestion(text);
+    setLoadingAi(true);
+    console.log('[VisionIQ] Submitting Chat Question:', text, 'for imageUri:', imageUri);
+    try {
+      const res = await visionApi.askChat({ sessionId: `session_${Date.now()}`, message: text, imageUri });
+      console.log('[VisionIQ] askChat Response Received:', res);
+      const ans = res.answer || res.result?.summary || (typeof res === 'string' ? res : JSON.stringify(res));
+      setAiResponse(ans);
+    } catch (err) {
+      console.error('[VisionIQ] askChat Error:', err);
+      setAiResponse(`Error analyzing question: ${err.message || err}`);
+    } finally {
+      setLoadingAi(false);
+    }
+  };
+
+  const requestStoragePermission = async () => {
+    if (Platform.OS !== 'android') return true;
+    try {
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
+        {
+          title: 'Storage Permission Required',
+          message: 'VisionIQ needs storage access to load the local Gemma model file from your Downloads folder.',
+          buttonPositive: 'Allow',
+          buttonNegative: 'Deny',
+        }
+      );
+      return granted === PermissionsAndroid.RESULTS.GRANTED;
+    } catch (err) {
+      console.warn('[HomeScreen] Storage permission request error:', err);
+      return false;
+    }
+  };
+
   useEffect(() => {
-    if (!hasNativeVoice || !Voice) return undefined;
-    Voice.onSpeechResults = event => { const text = event.value?.[0]?.trim(); setListening(false); if (text) { setQuestion(''); setSubmittedQuestion(text); } };
-    Voice.onSpeechError = () => setListening(false);
-    return () => {
-      try {
-        Voice.destroy?.().finally?.(Voice.removeAllListeners);
-      } catch (e) {
-        console.warn('Voice cleanup warning:', e);
-      }
-    };
+    requestStoragePermission();
+    const timer = setTimeout(() => setLanding(false), 900);
+    return () => clearTimeout(timer);
   }, []);
+
   useEffect(() => {
     const onBack = () => {
       if (assistantOpen) { closeAssistant(); return true; }
@@ -100,7 +133,8 @@ const HomeScreen = () => {
       if (result.errorCode) return error(result.errorMessage || 'The image picker could not be opened.');
       const asset = result.assets?.[0];
       if (!asset?.uri) return error('No image was selected. Please choose an image and try again.');
-      setImageUri(asset.uri); setImageConfirmed(false); addHistory(asset.uri, asset.fileName || 'Uploaded image'); setScreen('preview');
+      console.log('New image uploaded:', asset.uri);
+      setImageUri(asset.uri); setImageConfirmed(false); setAiResponse(''); setSubmittedQuestion(''); addHistory(asset.uri, asset.fileName || 'Uploaded image'); setScreen('preview');
     } catch (e) { error(e.message || 'The image picker could not be opened.'); }
   };
   const capture = async () => {
@@ -109,30 +143,76 @@ const HomeScreen = () => {
       setCapturing(true);
       const file = await photoOutput.capturePhotoToFile({ flashMode: 'off' }, {});
       const uri = file.filePath.startsWith('file://') ? file.filePath : `file://${file.filePath}`;
-      setImageUri(uri); setImageConfirmed(false); addHistory(uri, 'Captured image'); setScreen('preview');
+      console.log('New image captured:', uri);
+      setImageUri(uri); setImageConfirmed(false); setAiResponse(''); setSubmittedQuestion(''); addHistory(uri, 'Captured image'); setScreen('preview');
     } catch (e) { error(e.message || 'The photo could not be captured.'); } finally { setCapturing(false); }
   };
-  const openAssistant = () => { setImageConfirmed(true); setSubmittedQuestion(''); setAssistantOpen(true); setTimeout(() => input.current?.focus(), 250); };
-  const closeAssistant = () => {
-    if (hasNativeVoice && Voice && typeof Voice.cancel === 'function') {
-      Voice.cancel().catch(() => undefined);
+  const openAssistant = async () => {
+    setImageConfirmed(true);
+    setSubmittedQuestion('');
+    setAssistantOpen(true);
+    setTimeout(() => input.current?.focus(), 250);
+    console.log('[VisionIQ] Tick button clicked. Triggering AI analysis for:', imageUri);
+    setLoadingAi(true);
+    try {
+      const res = await visionApi.analyzeImage({ imageUri, source: 'upload' });
+      console.log('[VisionIQ] analyzeImage Response Received:', res);
+      const summaryText = res.result?.summary || res.answer || (typeof res === 'string' ? res : JSON.stringify(res));
+      setAiResponse(summaryText);
+    } catch (err) {
+      console.error('[VisionIQ] analyzeImage Error:', err);
+      setAiResponse(`Analysis failed: ${err.message || err}`);
+    } finally {
+      setLoadingAi(false);
     }
+  };
+  const closeAssistant = () => {
+    stopNativeVoiceRecognition().catch(() => undefined);
     setListening(false);
     setAssistantOpen(false);
   };
+
   const listen = async () => {
-    try {
-      if (!hasNativeVoice || !Voice || typeof Voice.start !== 'function') {
-        return error('Voice recognition is not available on this device.');
+    // Request mic permission first
+    if (Platform.OS === 'android') {
+      try {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+          {
+            title: 'Microphone Permission',
+            message: 'VisionIQ needs microphone access to understand your voice questions.',
+            buttonPositive: 'Allow',
+            buttonNegative: 'Deny',
+          }
+        );
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+          error('Microphone permission is required for voice input. Please enable it in Settings.');
+          return;
+        }
+      } catch (permErr) {
+        console.warn('[HomeScreen] Mic permission error:', permErr);
+        return;
       }
+    }
+
+    try {
       setListening(true);
-      await Voice.start('en-US');
+      const spokenText = await startNativeVoiceRecognition();
+      setListening(false);
+      if (spokenText?.trim()) {
+        setQuestion('');
+        setSubmittedQuestion(spokenText.trim());
+        submit(spokenText.trim());
+      }
     } catch (e) {
       setListening(false);
-      error(e.message || 'Voice recognition could not start.');
+      console.warn('[HomeScreen] Voice recognition error:', e);
+      error(e.message || 'Voice recognition could not start. Please type your question instead.');
     }
   };
-  const discard = () => { closeAssistant(); setImageUri(null); setImageConfirmed(false); setQuestion(''); setSubmittedQuestion(''); setScreen('home'); };
+
+
+  const discard = () => { closeAssistant(); setImageUri(null); setImageConfirmed(false); setQuestion(''); setSubmittedQuestion(''); setAiResponse(''); setLoadingAi(false); setScreen('home'); };
 
   if (screen === 'camera') return <SafeAreaView style={s.cameraScreen}>
     <StatusBar barStyle="light-content" backgroundColor="#000" />
@@ -147,7 +227,7 @@ const HomeScreen = () => {
     <StatusBar barStyle="light-content" backgroundColor="#000" /><Image source={{ uri: imageUri }} style={s.previewImage} resizeMode="contain" />
     <View style={s.previewHeader}><Text style={s.previewTitle}>Review image</Text><TouchableOpacity onPress={discard} style={s.close}><X color="#fff" size={24} /></TouchableOpacity></View>
     <View style={s.previewActions}><Text style={s.previewHint}>{imageConfirmed ? 'Choose another image or remove this one' : 'Image ready for analysis'}</Text>{imageConfirmed ? <View style={s.previewChoiceRow}><TouchableOpacity onPress={upload} style={s.previewSmallAction}><ImagePlus color="#fff" size={21} /></TouchableOpacity><TouchableOpacity onPress={discard} style={s.confirm}><X color="#090909" size={31} strokeWidth={3} /></TouchableOpacity><View style={s.previewSmallAction} /></View> : <TouchableOpacity onPress={openAssistant} style={s.confirm}><Check color="#090909" size={32} strokeWidth={3} /></TouchableOpacity>}</View>
-    <AssistantSheet visible={assistantOpen} close={closeAssistant} imageUri={imageUri} input={input} question={question} setQuestion={setQuestion} submit={submit} listening={listening} listen={listen} submitted={submittedQuestion} />
+    <AssistantSheet visible={assistantOpen} close={closeAssistant} imageUri={imageUri} input={input} question={question} setQuestion={setQuestion} submit={submit} listening={listening} listen={listen} submitted={submittedQuestion} loadingAi={loadingAi} aiResponse={aiResponse} />
   </SafeAreaView>;
 
   const recentHistory = history.slice(0, 5);
@@ -170,7 +250,73 @@ const HomeScreen = () => {
 const Dock = ({ active, icon, label, onPress }) => <TouchableOpacity accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={s.dockButton}><View style={[s.dockCircle, active && s.dockActive]}>{React.cloneElement(icon, { color: active ? '#080808' : '#bbb' })}</View></TouchableOpacity>;
 const Sheet = ({ visible, close, children }) => <Modal transparent visible={visible} animationType="fade" onRequestClose={close}><Pressable style={s.backdrop} onPress={close}><Pressable style={s.sheet} onPress={() => undefined}>{children}</Pressable></Pressable></Modal>;
 const HistorySheet = ({ visible, close, items, select }) => <Sheet visible={visible} close={close}><View style={s.handle} /><View style={s.sheetHead}><View><Text style={s.sheetTitle}>All recent scans</Text><Text style={s.sheetSub}>Your latest captures and uploads</Text></View><TouchableOpacity onPress={close} style={s.sheetClose}><X color="#fff" size={20} /></TouchableOpacity></View>{items.length ? <ScrollView style={s.historyList}>{items.map(item => <TouchableOpacity key={item.id} onPress={() => select(item)} style={s.sheetRow}><Image source={{ uri: item.uri }} style={s.sheetImage} /><View style={s.flex}><Text style={s.rowTitle}>{item.title}</Text><Text style={s.rowSub}>{item.time}</Text></View><ChevronRight color="#888" size={21} /></TouchableOpacity>)}</ScrollView> : <Text style={s.emptySheet}>No images yet. Capture or upload an image to start.</Text>}</Sheet>;
-const AssistantSheet = ({ visible, close, imageUri, input, question, setQuestion, submit, listening, listen, submitted }) => <Modal transparent visible={visible} animationType="slide" onRequestClose={close}><Pressable style={s.backdrop} onPress={close}><KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 24 : 0} style={s.assistantPosition}><Pressable style={s.assistantSheet} onPress={() => undefined}><View style={s.handle} /><View style={s.sheetHead}><View style={s.assistantHead}><Image source={{ uri: imageUri }} style={s.thumb} /><View><Text style={s.sheetTitle}>Ask about this image</Text><Text style={s.sheetSub}>VisionIQ is ready to help</Text></View></View><TouchableOpacity onPress={close} style={s.sheetClose}><X color="#fff" size={20} /></TouchableOpacity></View>{submitted ? <Text style={s.submitted}>“{submitted}” submitted</Text> : null}<View style={s.inputRow}><TextInput ref={input} value={question} onChangeText={setQuestion} onSubmitEditing={() => submit()} placeholder="Ask anything about this image..." placeholderTextColor="#888" returnKeyType="send" style={s.input} /><TouchableOpacity onPress={listen} style={[s.mic, listening && s.micActive]}><Mic color={listening ? '#080808' : yellow} size={21} /></TouchableOpacity><TouchableOpacity onPress={() => submit()} style={s.send}><Send color="#080808" size={18} /></TouchableOpacity></View></Pressable></KeyboardAvoidingView></Pressable></Modal>;
+const AssistantSheet = ({ visible, close, imageUri, input, question, setQuestion, submit, listening, listen, submitted, loadingAi, aiResponse }) => {
+  const [keyboardPadding, setKeyboardPadding] = useState(0);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvent, e => {
+      setKeyboardPadding(e.endCoordinates.height);
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardPadding(0);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
+  return (
+    <Modal transparent visible={visible} animationType="slide" onRequestClose={close}>
+      <View style={s.backdrop}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={close} />
+        <View style={{ width: '100%', paddingBottom: keyboardPadding, justifyContent: 'flex-end' }}>
+          <View style={s.assistantSheet}>
+            <View style={s.handle} />
+            <View style={s.sheetHead}>
+              <View style={s.assistantHead}>
+                {imageUri ? <Image source={{ uri: imageUri }} style={s.thumb} /> : null}
+                <View>
+                  <Text style={s.sheetTitle}>Ask about this image</Text>
+                  <Text style={s.sheetSub}>VisionIQ is ready to help</Text>
+                </View>
+              </View>
+              <TouchableOpacity onPress={close} style={s.sheetClose}>
+                <X color="#fff" size={20} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={{ maxHeight: 180, marginVertical: 10 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={true}>
+              {submitted ? <Text style={s.submitted}>“{submitted}”</Text> : null}
+              {loadingAi ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10 }}>
+                  <ActivityIndicator color={yellow} size="small" style={{ marginRight: 8 }} />
+                  <Text style={{ color: yellow, fontSize: 13, fontWeight: '600' }}>Analyzing image with Gemma AI...</Text>
+                </View>
+              ) : aiResponse ? (
+                <View style={{ backgroundColor: '#222222', borderRadius: 12, padding: 12, marginTop: 10, borderColor: '#333333', borderWidth: 1 }}>
+                  <Text style={{ color: '#F0F0F0', fontSize: 13, lineHeight: 19 }}>{aiResponse}</Text>
+                </View>
+              ) : null}
+            </ScrollView>
+            <View style={s.inputRow}>
+              <TextInput ref={input} value={question} onChangeText={setQuestion} onSubmitEditing={() => submit()} placeholder="Ask anything about this image..." placeholderTextColor="#888" returnKeyType="send" style={s.input} />
+              <TouchableOpacity onPress={listen} style={[s.mic, listening && s.micActive]}>
+                <Mic color={listening ? '#080808' : yellow} size={21} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => submit()} style={s.send}>
+                <Send color="#080808" size={18} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+};
 
 const s = StyleSheet.create({
   container:{flex:1,backgroundColor:'#050505'}, content:{paddingHorizontal:20,paddingBottom:112}, logoBox:{alignItems:'center',paddingBottom:22,paddingTop:22}, logo:{color:'#f5f5f5',fontSize:31,fontWeight:'900',letterSpacing:7},yellow:{color:yellow},tagline:{color:'#e2e2e2',fontSize:10,letterSpacing:1.15,marginTop:6},hero:{backgroundColor:'#121009',borderColor:'#866b00',borderRadius:25,borderWidth:1,flexDirection:'row',minHeight:250,overflow:'hidden',padding:24},heroCopy:{flex:1.12,justifyContent:'center'},heroWhite:{color:'#f8f8f8',fontSize:28,fontWeight:'800',lineHeight:37},heroYellow:{color:yellow,fontSize:28,fontWeight:'800',lineHeight:37},heroText:{color:'#d2d2d2',fontSize:14,lineHeight:21,marginTop:17},heroArt:{alignItems:'center',flex:0.88,justifyContent:'center'},ring1:{alignItems:'center',borderColor:yellow,borderRadius:72,borderWidth:2,height:140,justifyContent:'center',width:140},ring2:{alignItems:'center',borderColor:'#c59a00',borderRadius:54,borderWidth:6,height:108,justifyContent:'center',width:108},ring3:{alignItems:'center',backgroundColor:'#090909',borderColor:'#555',borderRadius:38,borderWidth:4,height:76,justifyContent:'center',width:76},spark:{position:'absolute',right:0,top:26},scanTile:{alignItems:'center',backgroundColor:'#101010',borderColor:'#383838',borderRadius:20,borderWidth:1,flexDirection:'row',marginTop:20,padding:15},scanIcon:{alignItems:'center',borderColor:'#806600',borderRadius:26,borderWidth:2,height:52,justifyContent:'center',width:52},scanCopy:{flex:1,marginLeft:14},scanTitle:{color:'#f4f4f4',fontSize:18,fontWeight:'700'},scanSub:{color:'#b5b5b5',fontSize:14,marginTop:3},sectionTitle:{color:'#f4f4f4',fontSize:20,fontWeight:'800',marginBottom:12,marginTop:25},noHistory:{alignItems:'center',backgroundColor:'#101010',borderColor:'#292929',borderRadius:18,borderWidth:1,flexDirection:'row',padding:18},noHistoryText:{color:'#a6a6a6',fontSize:14,marginLeft:10},historyCard:{alignItems:'center',backgroundColor:'#101010',borderColor:'#292929',borderRadius:18,borderWidth:1,flexDirection:'row',marginBottom:10,padding:10},historyImage:{borderRadius:11,height:72,width:72},historyCopy:{flex:1,marginHorizontal:12},historyTitle:{color:'#f5f5f5',fontSize:16,fontWeight:'700'},historySub:{color:'#aaa',fontSize:12,marginTop:4},badge:{alignSelf:'flex-start',backgroundColor:'#292516',borderRadius:9,color:yellow,fontSize:11,marginTop:7,paddingHorizontal:8,paddingVertical:3},dock:{alignItems:'center',backgroundColor:'#101010',borderColor:'#303030',borderRadius:28,borderWidth:1,bottom:20,flexDirection:'row',height:66,justifyContent:'space-around',left:27,position:'absolute',right:27},dockButton:{padding:8},dockCircle:{alignItems:'center',height:42,justifyContent:'center',width:42},dockActive:{backgroundColor:yellow,borderRadius:21},cameraScreen:{backgroundColor:'#000',flex:1},empty:{alignItems:'center',flex:1,justifyContent:'center'},emptyText:{color:'#fff'},close:{alignItems:'center',backgroundColor:'rgba(0,0,0,0.5)',borderRadius:22,height:44,justifyContent:'center',width:44},cameraScreenClose:{position:'absolute',right:22,top:18},cameraTip:{alignItems:'center',backgroundColor:'rgba(0,0,0,0.5)',borderRadius:16,flexDirection:'row',left:0,marginHorizontal:'auto',paddingHorizontal:12,paddingVertical:8,position:'absolute',right:0,top:72,width:225},cameraTipText:{color:'#fff',fontSize:12,marginLeft:6},frame:{bottom:'31%',height:240,left:42,position:'absolute',right:42},corner:{borderColor:yellow,height:44,position:'absolute',width:44},tl:{borderLeftWidth:4,borderTopWidth:4,left:0,top:0},tr:{borderRightWidth:4,borderTopWidth:4,right:0,top:0},bl:{borderBottomWidth:4,borderLeftWidth:4,bottom:0,left:0},br:{borderBottomWidth:4,borderRightWidth:4,bottom:0,right:0},cameraBar:{alignItems:'center',backgroundColor:'rgba(0,0,0,0.56)',bottom:0,flexDirection:'row',justifyContent:'space-around',left:0,paddingBottom:28,paddingTop:20,position:'absolute',right:0},uploadRound:{alignItems:'center',height:65,justifyContent:'center',width:72},uploadText:{color:'#fff',fontSize:12,marginTop:4},shutter:{alignItems:'center',backgroundColor:'#fff',borderColor:'rgba(255,255,255,0.6)',borderRadius:39,borderWidth:4,height:78,justifyContent:'center',width:78},shutterCenter:{backgroundColor:yellow,borderRadius:30,height:60,width:60},disabled:{opacity:0.55},lottieSmall:{height:60,width:60},previewScreen:{backgroundColor:'#000',flex:1},previewImage:{height:'100%',width:'100%'},previewHeader:{alignItems:'center',flexDirection:'row',justifyContent:'space-between',left:0,paddingHorizontal:22,position:'absolute',right:0,top:18},previewTitle:{color:'#fff',fontSize:17,fontWeight:'700'},previewActions:{alignItems:'center',backgroundColor:'rgba(0,0,0,0.56)',bottom:0,left:0,paddingBottom:34,paddingTop:16,position:'absolute',right:0},previewHint:{color:'#eee',fontSize:14,marginBottom:13},confirm:{alignItems:'center',backgroundColor:yellow,borderRadius:34,height:68,justifyContent:'center',width:68},backdrop:{backgroundColor:'rgba(0,0,0,0.67)',flex:1,justifyContent:'flex-end'},sheet:{backgroundColor:'#171717',borderTopLeftRadius:27,borderTopRightRadius:27,minHeight:'35%',paddingBottom:27,paddingHorizontal:20},assistantPosition:{justifyContent:'flex-end'},assistantSheet:{backgroundColor:'#171717',borderTopLeftRadius:27,borderTopRightRadius:27,minHeight:'35%',paddingBottom:28,paddingHorizontal:20},handle:{alignSelf:'center',backgroundColor:'#626262',borderRadius:3,height:5,marginBottom:17,marginTop:10,width:43},sheetHead:{alignItems:'center',flexDirection:'row',justifyContent:'space-between'},sheetTitle:{color:'#f5f5f5',fontSize:17,fontWeight:'800'},sheetSub:{color:'#a5a5a5',fontSize:12,marginTop:3},sheetClose:{alignItems:'center',backgroundColor:'#303030',borderRadius:17,height:34,justifyContent:'center',width:34},emptySheet:{color:'#aaa',fontSize:14,lineHeight:21,marginTop:23,textAlign:'center'},sheetRow:{alignItems:'center',borderBottomColor:'#303030',borderBottomWidth:1,flexDirection:'row',marginTop:16,paddingBottom:12},sheetImage:{borderRadius:8,height:50,marginRight:11,width:50},flex:{flex:1},rowTitle:{color:'#f5f5f5',fontSize:14,fontWeight:'700'},rowSub:{color:'#a5a5a5',fontSize:12,marginTop:3},assistantHead:{alignItems:'center',flexDirection:'row'},thumb:{borderRadius:7,height:37,marginRight:10,width:37},submitted:{color:'#c3c3c3',fontSize:13,marginTop:13},inputRow:{alignItems:'center',backgroundColor:'#292929',borderColor:'#414141',borderRadius:16,borderWidth:1,flexDirection:'row',marginTop:18,minHeight:54,paddingLeft:13},input:{color:'#f5f5f5',flex:1,fontSize:14,paddingVertical:10},mic:{alignItems:'center',height:42,justifyContent:'center',width:38},micActive:{backgroundColor:yellow,borderRadius:21},send:{alignItems:'center',backgroundColor:yellow,borderRadius:17,height:34,justifyContent:'center',marginRight:8,width:34},landing:{alignItems:'center',backgroundColor:'#050505',bottom:0,justifyContent:'center',left:0,position:'absolute',right:0,top:0,zIndex:10},lottieLanding:{height:95,width:95},loadingText:{color:'#eee',fontSize:14,fontWeight:'600',marginTop:4}
