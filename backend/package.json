@@ -1,0 +1,25 @@
+{
+  "name": "visioniq-backend",
+  "version": "1.0.0",
+  "description": "Backend API for the iQOO Vision AI hackathon project",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "echo \"No backend tests configured yet\""
+  },
+  "keywords": [
+    "hackathon",
+    "vision-ai",
+    "react-native"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "multer": "^2.3.0"
+  }
+}
