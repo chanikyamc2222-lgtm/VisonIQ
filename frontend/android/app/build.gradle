@@ -59,13 +59,13 @@ dependencies {
         implementation jscFlavor
     }
 
-    // ── LiteRT on-device inference ──────────────────────────────────────
-    // Core LiteRT runtime
-    implementation 'com.google.ai.edge.litert:litert:1.0.1'
-    implementation 'com.google.ai.edge.litert:litert-gpu:1.0.1'
-
-    // MediaPipe LLM Inference — includes LlmInference, LlmInferenceSession,
-    // GraphOptions, MPImage, BitmapImageBuilder
-    implementation 'com.google.mediapipe:tasks-genai:0.10.20'
-    implementation 'com.google.mediapipe:tasks-vision:0.10.20'
+    // ── LiteRT-LM on-device inference ───────────────────────────────────
+    // Runs the gemma-4-E2B-it.litertlm bundle. This replaces
+    // com.google.mediapipe:tasks-genai, which cannot do vision on Gemma 4:
+    // its vision executor requires an encoder with exactly one input tensor
+    // (litert_vision_executor.cc:294) and Gemma 4's has several. LiteRT-LM is
+    // also the runtime Google's AI Edge Gallery ships for these models, and the
+    // MediaPipe LLM API is in maintenance-only mode.
+    // Hosted on Google Maven only — not Maven Central.
+    implementation 'com.google.ai.edge.litertlm:litertlm-android:0.16.1'
 }

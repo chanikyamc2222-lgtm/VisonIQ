@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -27,56 +27,36 @@ export const VoiceDebugger = () => {
   const [isListening, setIsListening] = useState(false);
   const [voiceReady, setVoiceReady] = useState(false);
 
+  const addLog = useCallback(message => {
+    const timestamp = new Date().toLocaleTimeString();
+    setLogs(prev => [...prev, `[${timestamp}] ${message}`]);
+  }, []);
+
   useEffect(() => {
     addLog('Component mounted');
-
-    if (!hasNativeVoice || !Voice) {
-      addLog('❌ Voice module is NULL or not registered on Android');
+    if (Platform.OS !== 'android') {
+      addLog('❌ Native speech recognition is Android-only');
       setVoiceReady(false);
       return;
     }
-
-    addLog('✅ Voice module found');
-
-    Voice.onSpeechStart = () => addLog('🎤 Speech started');
-    Voice.onSpeechEnd = () => addLog('✋ Speech ended');
-    Voice.onSpeechResults = (event) => {
-      addLog(`📝 Results: ${JSON.stringify(event.value)}`);
-      setIsListening(false);
-    };
-    Voice.onSpeechError = (event) => {
-      addLog(`❌ Error: ${event.error}`);
-      setIsListening(false);
-    };
-
     setVoiceReady(true);
-    addLog('✅ Voice handlers initialized');
-
-    return () => {
-      addLog('Component unmounting - cleaning up');
-      if (hasNativeVoice && Voice) {
-        Voice.destroy?.().catch(e => addLog(`⚠️ Destroy error: ${e}`));
-      }
-    };
-  }, []);
-
-  const addLog = (message) => {
-    const timestamp = new Date().toLocaleTimeString();
-    const logMessage = `[${timestamp}] ${message}`;
-    setLogs(prev => [...prev, logMessage]);
-  };
+    addLog('✅ Native speech recognition available');
+  }, [addLog]);
 
   const testVoiceStart = async () => {
     try {
-      if (!hasNativeVoice || !Voice || typeof Voice.start !== 'function') {
-        addLog('❌ Native Voice module not registered. Rebuild the app and grant microphone permission.');
-        setIsListening(false);
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+      );
+      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+        addLog('❌ Microphone permission denied');
         return;
       }
       addLog('🔄 Starting voice recognition...');
       setIsListening(true);
-      await Voice.start('en-US');
-      addLog('✅ Voice started successfully');
+      const text = await startNativeVoiceRecognition();
+      setIsListening(false);
+      addLog(`📝 Result: ${text || '(empty)'}`);
     } catch (error) {
       addLog(`❌ Start failed: ${error.message}`);
       setIsListening(false);
@@ -85,31 +65,12 @@ export const VoiceDebugger = () => {
 
   const testVoiceStop = async () => {
     try {
-      if (!hasNativeVoice || !Voice || typeof Voice.stop !== 'function') {
-        addLog('❌ Voice stop unavailable because native module is missing');
-        return;
-      }
       addLog('⏹️ Stopping voice recognition...');
-      await Voice.stop();
+      await stopNativeVoiceRecognition();
       setIsListening(false);
       addLog('✅ Voice stopped successfully');
     } catch (error) {
       addLog(`❌ Stop failed: ${error.message}`);
-    }
-  };
-
-  const testVoiceCancel = async () => {
-    try {
-      if (!hasNativeVoice || !Voice || typeof Voice.cancel !== 'function') {
-        addLog('❌ Voice cancel unavailable because native module is missing');
-        return;
-      }
-      addLog('🚫 Canceling voice recognition...');
-      await Voice.cancel();
-      setIsListening(false);
-      addLog('✅ Voice canceled successfully');
-    } catch (error) {
-      addLog(`❌ Cancel failed: ${error.message}`);
     }
   };
 
@@ -168,13 +129,6 @@ export const VoiceDebugger = () => {
           ]}
         >
           <Text style={styles.buttonText}>⏹️ Stop</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          onPress={testVoiceCancel}
-          style={[styles.button, { backgroundColor: '#FFA500' }]}
-        >
-          <Text style={styles.buttonText}>🚫 Cancel</Text>
         </TouchableOpacity>
 
         <TouchableOpacity

@@ -185,14 +185,6 @@ export const VoiceChatModal = ({
       stopListening();
     }
 
-    try {
-      if (hasNativeVoice && voiceRef.current) {
-        voiceRef.current.cancel?.().catch(() => {});
-      }
-    } catch (error) {
-      console.error('Cancel error:', error);
-    }
-
     setIsListening(false);
     setQuestion('');
     setSubmitted('');

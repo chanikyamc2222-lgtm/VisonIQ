@@ -8,11 +8,8 @@
     <!-- Storage: READ_EXTERNAL_STORAGE for Android ≤ 12, ignored on 13+ -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
-    <!-- Android 13+ image/video access -->
+    <!-- Android 13+ image access, for the image picker -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <!-- Required to read .litertlm model file from Downloads on Android 13+ -->
-    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
-
 
     <application
       android:name=".MainApplication"
@@ -23,6 +20,9 @@
       android:theme="@style/AppTheme"
       android:usesCleartextTraffic="${usesCleartextTraffic}"
       android:supportsRtl="true">
+      <!-- Required by LiteRT-LM's GPU backend (used for the vision encoder) -->
+      <uses-native-library android:name="libvndksupport.so" android:required="false" />
+      <uses-native-library android:name="libOpenCL.so" android:required="false" />
       <activity
         android:name=".MainActivity"
         android:label="@string/app_name"
