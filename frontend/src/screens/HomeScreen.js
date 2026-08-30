@@ -26,7 +26,7 @@ import { Camera, useCameraDevice, useCameraPermission, usePhotoOutput } from 're
 import { launchImageLibrary } from 'react-native-image-picker';
 import { addHistoryItem } from '../store/slices/historySlice';
 import { visionApi } from '../services/api/visionApi';
-import { startNativeVoiceRecognition, stopNativeVoiceRecognition } from '../services/api/localLLMService';
+import { startNativeVoiceRecognition, stopNativeVoiceRecognition, requestAllStorageAccess } from '../services/api/localLLMService';
 import scanLoader from '../assets/scan-loader.json';
 
 const yellow = '#FFC400';
@@ -83,27 +83,16 @@ const HomeScreen = () => {
     }
   };
 
-  const requestStoragePermission = async () => {
-    if (Platform.OS !== 'android') return true;
+  const handleStoragePermission = async () => {
     try {
-      const granted = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
-        {
-          title: 'Storage Permission Required',
-          message: 'VisionIQ needs storage access to load the local Gemma model file from your Downloads folder.',
-          buttonPositive: 'Allow',
-          buttonNegative: 'Deny',
-        }
-      );
-      return granted === PermissionsAndroid.RESULTS.GRANTED;
+      await requestAllStorageAccess();
     } catch (err) {
-      console.warn('[HomeScreen] Storage permission request error:', err);
-      return false;
+      console.warn('[HomeScreen] All files access permission request error:', err);
     }
   };
 
   useEffect(() => {
-    requestStoragePermission();
+    handleStoragePermission();
     const timer = setTimeout(() => setLanding(false), 900);
     return () => clearTimeout(timer);
   }, []);

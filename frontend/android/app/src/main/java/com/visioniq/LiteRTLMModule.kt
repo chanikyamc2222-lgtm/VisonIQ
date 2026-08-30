@@ -11,6 +11,7 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.content.Intent
+import android.provider.Settings
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -54,13 +55,16 @@ class LiteRTLMModule(private val reactContext: ReactApplicationContext) : ReactC
     // ─── Model File Discovery ─────────────────────────────────────────────────
 
     private fun getDefaultModelFile(): File? {
-        val searchDirs = listOf(
-            reactContext.filesDir,
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-            File("/storage/emulated/0/Download"),
-            File("/storage/emulated/0/Downloads"),
-            File("/sdcard/Download")
-        )
+        val searchDirs = mutableListOf<File>()
+        searchDirs.add(File("/storage/emulated/0/VisionIQ"))
+        searchDirs.add(File("/sdcard/VisionIQ"))
+        searchDirs.add(reactContext.filesDir)
+        reactContext.getExternalFilesDir(null)?.let { searchDirs.add(it) }
+        searchDirs.add(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS))
+        searchDirs.add(File("/storage/emulated/0/Download"))
+        searchDirs.add(File("/storage/emulated/0/Downloads"))
+        searchDirs.add(File("/sdcard/Download"))
+
         val targetNames = listOf(
             "gemma-4-E2B-it.litertlm",
             "gemma-4-e2b-it.litertlm",
@@ -289,7 +293,7 @@ class LiteRTLMModule(private val reactContext: ReactApplicationContext) : ReactC
                 }
 
                 if (speechRecognizer == null) {
-                    val context = currentActivity ?: reactContext
+                    val context = reactContext.currentActivity ?: reactContext
                     speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
                 }
 
@@ -349,6 +353,32 @@ class LiteRTLMModule(private val reactContext: ReactApplicationContext) : ReactC
             } catch (e: Exception) {
                 promise.reject("SPEECH_STOP_ERROR", e.message, e)
             }
+        }
+    }
+
+    @ReactMethod
+    fun requestAllFilesAccess(promise: Promise) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            if (!Environment.isExternalStorageManager()) {
+                try {
+                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                        data = Uri.parse("package:${reactContext.packageName}")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    reactContext.startActivity(intent)
+                    promise.resolve(false)
+                } catch (e: Exception) {
+                    val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    reactContext.startActivity(intent)
+                    promise.resolve(false)
+                }
+            } else {
+                promise.resolve(true)
+            }
+        } else {
+            promise.resolve(true)
         }
     }
 

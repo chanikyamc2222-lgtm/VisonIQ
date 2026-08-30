@@ -3,7 +3,19 @@ import { NativeModules, Platform } from 'react-native';
 const { LiteRTLMModule } = NativeModules;
 
 export const DEFAULT_MODEL_FILENAME = 'gemma-4-e2b-it.litertlm';
-export const DEFAULT_MODEL_PATH = `/storage/emulated/0/Download/${DEFAULT_MODEL_FILENAME}`;
+export const DEFAULT_MODEL_PATH = `/storage/emulated/0/VisionIQ/${DEFAULT_MODEL_FILENAME}`;
+
+export const requestAllStorageAccess = async () => {
+  if (Platform.OS !== 'android' || !LiteRTLMModule || typeof LiteRTLMModule.requestAllFilesAccess !== 'function') {
+    return true;
+  }
+  try {
+    return await LiteRTLMModule.requestAllFilesAccess();
+  } catch (e) {
+    console.warn('[localLLM] requestAllFilesAccess error:', e);
+    return false;
+  }
+};
 
 /**
  * Check if local Gemma model file exists on device storage
