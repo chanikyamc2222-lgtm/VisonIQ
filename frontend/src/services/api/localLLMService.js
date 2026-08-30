@@ -58,8 +58,12 @@ export const startNativeVoiceRecognition = async () => {
   if (Platform.OS !== 'android' || !LiteRTLMModule || typeof LiteRTLMModule.startSpeechRecognition !== 'function') {
     throw new Error('Native speech recognition is not supported on this device.');
   }
-  const res = await LiteRTLMModule.startSpeechRecognition();
-  return res?.text || '';
+  try {
+    const res = await LiteRTLMModule.startSpeechRecognition();
+    return res?.text || '';
+  } catch (e) {
+    return '';
+  }
 };
 
 /**

@@ -43,7 +43,6 @@ const HomeScreen = () => {
   const [imageConfirmed, setImageConfirmed] = useState(false);
   const [ready, setReady] = useState(false);
   const [capturing, setCapturing] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [question, setQuestion] = useState('');
   const [submittedQuestion, setSubmittedQuestion] = useState('');
@@ -112,13 +111,12 @@ const HomeScreen = () => {
   useEffect(() => {
     const onBack = () => {
       if (assistantOpen) { closeAssistant(); return true; }
-      if (historyOpen) { setHistoryOpen(false); return true; }
       if (screen !== 'home') { setScreen('home'); return true; }
       return false;
     };
     const listener = BackHandler.addEventListener('hardwareBackPress', onBack);
     return () => listener.remove();
-  }, [assistantOpen, historyOpen, screen]);
+  }, [assistantOpen, screen]);
 
   const openCamera = async () => {
     try {
@@ -230,6 +228,51 @@ const HomeScreen = () => {
     <AssistantSheet visible={assistantOpen} close={closeAssistant} imageUri={imageUri} input={input} question={question} setQuestion={setQuestion} submit={submit} listening={listening} listen={listen} submitted={submittedQuestion} loadingAi={loadingAi} aiResponse={aiResponse} />
   </SafeAreaView>;
 
+  if (screen === 'history') {
+    return (
+      <SafeAreaView style={[s.container, { flex: 1 }]}>
+        <StatusBar barStyle="light-content" backgroundColor="#050505" />
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: '#202020' }}>
+          <TouchableOpacity onPress={() => setScreen('home')} style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: '#1C1C1E', justifyContent: 'center', alignItems: 'center' }}>
+            <X color="#fff" size={24} />
+          </TouchableOpacity>
+          <Text style={{ color: '#fff', fontSize: 18, fontWeight: '700' }}>All Recent Scans</Text>
+          <View style={{ width: 44 }} />
+        </View>
+
+        {history.length ? (
+          <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 16, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
+            {history.map(item => (
+              <TouchableOpacity
+                key={item.id}
+                onPress={() => {
+                  setImageUri(item.uri);
+                  setScreen('preview');
+                }}
+                style={s.historyCard}
+              >
+                <Image source={{ uri: item.uri }} style={s.historyImage} />
+                <View style={s.historyCopy}>
+                  <Text style={s.historyTitle} numberOfLines={1}>{item.title}</Text>
+                  <Text style={s.historySub}>Image · {item.time}</Text>
+                  <Text style={s.badge}>Ready to analyze</Text>
+                </View>
+                <ChevronRight color="#777" size={27} />
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        ) : (
+          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 40 }}>
+            <History color="#777" size={48} />
+            <Text style={{ color: '#aaa', fontSize: 16, marginTop: 16, textAlign: 'center' }}>
+              No images yet. Capture or upload an image to start.
+            </Text>
+          </View>
+        )}
+      </SafeAreaView>
+    );
+  }
+
   const recentHistory = history.slice(0, 5);
 
   return <SafeAreaView style={[s.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
@@ -241,15 +284,12 @@ const HomeScreen = () => {
       <Text style={s.sectionTitle}>Recent scans</Text>
       {recentHistory.length ? recentHistory.map(item => <TouchableOpacity key={item.id} onPress={() => { setImageUri(item.uri); setScreen('preview'); }} style={s.historyCard}><Image source={{ uri: item.uri }} style={s.historyImage} /><View style={s.historyCopy}><Text style={s.historyTitle} numberOfLines={1}>{item.title}</Text><Text style={s.historySub}>Image · {item.time}</Text><Text style={s.badge}>Ready to analyze</Text></View><ChevronRight color="#777" size={27} /></TouchableOpacity>) : <View style={s.noHistory}><History color="#777" size={21} /><Text style={s.noHistoryText}>Your scanned images will appear here.</Text></View>}
     </ScrollView>
-    <View style={s.dock}><Dock icon={<History size={25} />} label="History" onPress={() => setHistoryOpen(true)} /><Dock active icon={<CameraIcon size={27} />} label="Capture" onPress={openCamera} /><Dock icon={<FileImage size={25} />} label="Upload" onPress={upload} /></View>
-    <HistorySheet visible={historyOpen} close={() => setHistoryOpen(false)} items={history} select={item => { setHistoryOpen(false); setImageUri(item.uri); setScreen('preview'); }} />
+    <View style={s.dock}><Dock icon={<History size={25} />} label="History" onPress={() => setScreen('history')} /><Dock active icon={<CameraIcon size={27} />} label="Capture" onPress={openCamera} /><Dock icon={<FileImage size={25} />} label="Upload" onPress={upload} /></View>
     {landing && <View style={s.landing}><LottieView autoPlay loop source={scanLoader} style={s.lottieLanding} /><Text style={s.loadingText}>Preparing VisionIQ</Text></View>}
   </SafeAreaView>;
 };
 
 const Dock = ({ active, icon, label, onPress }) => <TouchableOpacity accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={s.dockButton}><View style={[s.dockCircle, active && s.dockActive]}>{React.cloneElement(icon, { color: active ? '#080808' : '#bbb' })}</View></TouchableOpacity>;
-const Sheet = ({ visible, close, children }) => <Modal transparent visible={visible} animationType="fade" onRequestClose={close}><Pressable style={s.backdrop} onPress={close}><Pressable style={s.sheet} onPress={() => undefined}>{children}</Pressable></Pressable></Modal>;
-const HistorySheet = ({ visible, close, items, select }) => <Sheet visible={visible} close={close}><View style={s.handle} /><View style={s.sheetHead}><View><Text style={s.sheetTitle}>All recent scans</Text><Text style={s.sheetSub}>Your latest captures and uploads</Text></View><TouchableOpacity onPress={close} style={s.sheetClose}><X color="#fff" size={20} /></TouchableOpacity></View>{items.length ? <ScrollView style={s.historyList}>{items.map(item => <TouchableOpacity key={item.id} onPress={() => select(item)} style={s.sheetRow}><Image source={{ uri: item.uri }} style={s.sheetImage} /><View style={s.flex}><Text style={s.rowTitle}>{item.title}</Text><Text style={s.rowSub}>{item.time}</Text></View><ChevronRight color="#888" size={21} /></TouchableOpacity>)}</ScrollView> : <Text style={s.emptySheet}>No images yet. Capture or upload an image to start.</Text>}</Sheet>;
 const AssistantSheet = ({ visible, close, imageUri, input, question, setQuestion, submit, listening, listen, submitted, loadingAi, aiResponse }) => {
   const [keyboardPadding, setKeyboardPadding] = useState(0);
 
@@ -276,41 +316,43 @@ const AssistantSheet = ({ visible, close, imageUri, input, question, setQuestion
         <Pressable style={StyleSheet.absoluteFill} onPress={close} />
         <View style={{ width: '100%', paddingBottom: keyboardPadding, justifyContent: 'flex-end' }}>
           <View style={s.assistantSheet}>
-            <View style={s.handle} />
-            <View style={s.sheetHead}>
-              <View style={s.assistantHead}>
-                {imageUri ? <Image source={{ uri: imageUri }} style={s.thumb} /> : null}
-                <View>
-                  <Text style={s.sheetTitle}>Ask about this image</Text>
-                  <Text style={s.sheetSub}>VisionIQ is ready to help</Text>
+            <SafeAreaView style={{ flex: 0 }}>
+              <View style={s.handle} />
+              <View style={s.sheetHead}>
+                <View style={s.assistantHead}>
+                  {imageUri ? <Image source={{ uri: imageUri }} style={s.thumb} /> : null}
+                  <View>
+                    <Text style={s.sheetTitle}>Ask about this image</Text>
+                    <Text style={s.sheetSub}>VisionIQ is ready to help</Text>
+                  </View>
                 </View>
+                <TouchableOpacity onPress={close} style={s.sheetClose}>
+                  <X color="#fff" size={20} />
+                </TouchableOpacity>
               </View>
-              <TouchableOpacity onPress={close} style={s.sheetClose}>
-                <X color="#fff" size={20} />
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={{ maxHeight: 180, marginVertical: 10 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={true}>
-              {submitted ? <Text style={s.submitted}>“{submitted}”</Text> : null}
-              {loadingAi ? (
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10 }}>
-                  <ActivityIndicator color={yellow} size="small" style={{ marginRight: 8 }} />
-                  <Text style={{ color: yellow, fontSize: 13, fontWeight: '600' }}>Analyzing image with Gemma AI...</Text>
-                </View>
-              ) : aiResponse ? (
-                <View style={{ backgroundColor: '#222222', borderRadius: 12, padding: 12, marginTop: 10, borderColor: '#333333', borderWidth: 1 }}>
-                  <Text style={{ color: '#F0F0F0', fontSize: 13, lineHeight: 19 }}>{aiResponse}</Text>
-                </View>
-              ) : null}
-            </ScrollView>
-            <View style={s.inputRow}>
-              <TextInput ref={input} value={question} onChangeText={setQuestion} onSubmitEditing={() => submit()} placeholder="Ask anything about this image..." placeholderTextColor="#888" returnKeyType="send" style={s.input} />
-              <TouchableOpacity onPress={listen} style={[s.mic, listening && s.micActive]}>
-                <Mic color={listening ? '#080808' : yellow} size={21} />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => submit()} style={s.send}>
-                <Send color="#080808" size={18} />
-              </TouchableOpacity>
-            </View>
+              <ScrollView style={{ maxHeight: 180, marginVertical: 10 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={true}>
+                {submitted ? <Text style={s.submitted}>“{submitted}”</Text> : null}
+                {loadingAi ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10 }}>
+                    <ActivityIndicator color={yellow} size="small" style={{ marginRight: 8 }} />
+                    <Text style={{ color: yellow, fontSize: 13, fontWeight: '600' }}>Analyzing image with Gemma AI...</Text>
+                  </View>
+                ) : aiResponse ? (
+                  <View style={{ backgroundColor: '#222222', borderRadius: 12, padding: 12, marginTop: 10, borderColor: '#333333', borderWidth: 1 }}>
+                    <Text style={{ color: '#F0F0F0', fontSize: 13, lineHeight: 19 }}>{aiResponse}</Text>
+                  </View>
+                ) : null}
+              </ScrollView>
+              <View style={s.inputRow}>
+                <TextInput ref={input} value={question} onChangeText={setQuestion} onSubmitEditing={() => submit()} placeholder="Ask anything about this image..." placeholderTextColor="#888" returnKeyType="send" style={s.input} />
+                <TouchableOpacity onPress={listen} style={[s.mic, listening && s.micActive]}>
+                  <Mic color={listening ? '#080808' : yellow} size={21} />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => submit()} style={s.send}>
+                  <Send color="#080808" size={18} />
+                </TouchableOpacity>
+              </View>
+            </SafeAreaView>
           </View>
         </View>
       </View>
